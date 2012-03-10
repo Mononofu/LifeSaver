@@ -11,10 +11,14 @@
 
 #include "screenhack.h"
 #include <stdlib.h>
+#include <time.h>
 
-#define ALIVE 255
-#define DEAD 0
 #define RANDOM_LIFE 3
+#define COLORS 32
+
+const unsigned char CHANGED = 128;
+const unsigned char ALIVE = COLORS - 1;
+const unsigned char DEAD = 0;
 
 /* a new cell will appear if the number of neighbors (Sum)
  * is equal or more than r[0] and equal or less than r[1]
@@ -25,16 +29,19 @@ struct state {
   Display *dpy;
   Window window;
 
-  GC gc;
+  GC gcs [COLORS];
   int delay;
-  unsigned long fg, bg, pixels [256];
   int npixels;
   int xlim, ylim;
   Colormap cmap;
+  Pixmap pmap;
 
   unsigned char **world;
   unsigned char **old_world;
   int scale, length, height;
+
+  time_t last_update;
+  int frames;
 };
 
 static void HSVtoRGB( float *r, float *g, float *b, float h, float s, float v )
@@ -91,7 +98,7 @@ generate_world(int length, int height)
   /* to allow faster calculation, we have 1 char padding around
    * our world, so we need to add that here */
   int i;
-  unsigned char **world = calloc(length + 2, sizeof(char *));
+  unsigned char **world = calloc(length+2, sizeof(char *));
   /* calloc will set all bits to 0 */
   world[0] = calloc((length+2) * (height+2), sizeof(char));
 
@@ -105,21 +112,24 @@ static void
 setup_world(void *closure)
 {
   struct state* st = (struct state *) closure;
-
   st->length = st->xlim / st->scale;
   st->height = st->ylim / st->scale;
 
   st->world = generate_world(st->length, st->height);
   st->old_world = generate_world(st->length, st->height);
+
+  if(st->pmap != 0)
+      XFreePixmap(st->dpy, st->pmap);
+
+  st->pmap = XCreatePixmap(st->dpy, st->window,st->xlim, st->ylim, 24);
+
+  XFillRectangle(st->dpy, st->pmap, st->gcs[0], 0, 0, st->xlim, st->ylim);
 }
 
 static void *
 life_init (Display *dpy, Window window)
 {
   struct state *st = (struct state *) calloc (1, sizeof(*st));
-  int i;
-
-  XGCValues gcv;
   XWindowAttributes xgwa;
   st->dpy = dpy;
   st->window = window;
@@ -128,34 +138,39 @@ life_init (Display *dpy, Window window)
   st->xlim = xgwa.width;
   st->ylim = xgwa.height;
   st->cmap = xgwa.colormap;
-  gcv.foreground= st->fg= get_pixel_resource(st->dpy, st->cmap, "foreground","Foreground");
-  gcv.background= st->bg= get_pixel_resource(st->dpy, st->cmap, "background","Background");
+  st->pmap = 0;
 
   st->delay = get_integer_resource (st->dpy, "delay", "Integer");
   st->scale = get_integer_resource (st->dpy, "scale", "Integer");
   if (st->delay < 0) st->delay = 0;
 
-  st->gc = XCreateGC (st->dpy, st->window, GCForeground, &gcv);
-
-
-  for(st->npixels = 0; st->npixels < 256; st->npixels++)
+  for(st->npixels = 0; st->npixels < COLORS; st->npixels++)
   {
+    int i = st->npixels;
     float r, g, b;
-    HSVtoRGB(&r, &g, &b, 195.0f, st->npixels/256.0f, st->npixels/256.0f);
+    XColor fgc;
+    XGCValues gcv;
+    HSVtoRGB(&r, &g, &b, 195.0f, 1.0f*i/COLORS, 1.0f*i/COLORS);
 
-    if(st->npixels == 255)
+    st->gcs[i] = XCreateGC (st->dpy, st->window, GCForeground, &gcv);
+
+    if(i == COLORS - 1)
       r = g = b = 1.0f;
 
-    XColor fgc;
     fgc.flags = DoRed|DoGreen|DoBlue;
     fgc.red = 65535*r;
     fgc.green = 65535*g;
     fgc.blue = 65535*b;
     XAllocColor (st->dpy, st->cmap, &fgc);
-    st->pixels[st->npixels] = fgc.pixel;
+
+
+    gcv.foreground = fgc.pixel;
+    XChangeGC (st->dpy, st->gcs[i], GCForeground, &gcv);
   }
 
   setup_world(st);
+  st->last_update = time(NULL);
+  st->frames = 0;
   return st;
 }
 
@@ -166,17 +181,17 @@ randomize_world(void *closure)
   int x, y;
 
   /* randomize borders */
-  for(x = 0; x < st->length+1; ++x)
+  for(x = 0; x < st->length+2; ++x)
   {
     /* set padding as well as the normal map */
-    st->world[x][1] = st->world[x][st->height-1] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
-    st->world[x][st->height-2] = st->world[x][0] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    st->world[x][1] = st->world[x][st->height+1] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    st->world[x][st->height] = st->world[x][0] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
   }
 
-  for(y = 0; y < st->height+1; ++y)
+  for(y = 0; y < st->height+2; ++y)
   {
-    st->world[1][y] = st->world[st->length - 1][y] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
-    st->world[st->length - 2][y] = st->world[0][y] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    st->world[1][y] = st->world[st->length+1][y] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    st->world[st->length][y] = st->world[0][y] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
   }
 }
 
@@ -191,10 +206,10 @@ update_world(void *closure)
 {
   struct state* st = (struct state *) closure;
   int x, y;
+  void *tmp = st->world;
 
   randomize_world(closure);
 
-  void *tmp = st->world;
   st->world = st->old_world;
   st->old_world = tmp;
 
@@ -213,13 +228,12 @@ update_world(void *closure)
       if(st->old_world[x][y] == ALIVE)
         --alive_count;
 
-      st->world[x][y] = st->old_world[x][y];
-
       if(alive_count >= R[0] && alive_count <= R[1])
-        st->world[x][y] = ALIVE;
-      
-      if(alive_count > R[2] || alive_count < R[3])
-        st->world[x][y] = max(st->world[x][y] - 10, 0);
+        st->world[x][y] = ALIVE | CHANGED;
+      else if((alive_count > R[2] || alive_count < R[3]))
+        st->world[x][y] = max(st->old_world[x][y] - 1, 0) | CHANGED;
+      else
+        st->world[x][y] = st->old_world[x][y];
     }
   }
 }
@@ -230,26 +244,37 @@ paint_world(void *closure)
   struct state* st = (struct state *) closure;
   int x, y;
 
-  XGCValues gcv;
-  Pixmap p = XCreatePixmap(st->dpy, st->window,st->xlim, st->ylim, 24);
+  for(x = 1; x < st->length+1; ++x)
+    for(y = 1; y < st->height+1; ++y) {
 
-  for(x = 1; x < st->length; ++x)
-    for(y = 1; y < st->height; ++y) {
-      /* select color according to age */
-      gcv.foreground = st->pixels[ st->world[x][y] ];
-      XChangeGC (st->dpy, st->gc, GCForeground, &gcv);
-
-      XFillRectangle(st->dpy, p, st->gc, st->scale*x, st->scale*y, st->scale, st->scale);
+      if(st->world[x][y] & CHANGED)
+      {
+        st->world[x][y] &= ALIVE;
+        /*if(st->scale == 1)*/
+          XDrawPoint(st->dpy, st->pmap, st->gcs[ st->world[x][y] ], x-1, y-1);
+        /*else
+          XFillRectangle(st->dpy, st->pmap, st->gcs[ st->world[x][y] ], st->scale*(x-1), st->scale*(y-1), st->scale, st->scale);*/
+      }
     }
 
-  XCopyArea(st->dpy, p, st->window, st->gc, 0, 0, st->xlim, st->ylim, 0, 0);
-  XFreePixmap(st->dpy, p);
+  XCopyArea(st->dpy, st->pmap, st->window, st->gcs[0], 0, 0, st->xlim, st->ylim, 0, 0);
 }
 
 static unsigned long
 life_draw (Display *dpy, Window window, void *closure)
 {
   struct state* st = (struct state *) closure;
+
+  st->frames++;
+
+  time_t now = time(NULL);
+  /* print FPS every 5 seconds */
+  if(now > st->last_update + 5)
+  {
+    st->last_update = now;
+    fprintf(stderr, "FPS: %f \n", st->frames / 5.0f);
+    st->frames = 0;
+  }
 
   update_world(closure);
   paint_world(closure);
