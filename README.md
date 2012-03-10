@@ -8,4 +8,4 @@ It looks like this:
 Usage
 =======
 
-At the moment, you'll have to build it yourself. Download xscreensaver, copy the `.c` and the `Makefile` to the correct position and build. I'll write a buildscript to do that when I have time.
+At the moment, you'll have to build it yourself. Download xscreensaver, copy the `.c` and the `Makefile` to the correct position and build. (Directory structure should be the same as here in the repo) I'll write a buildscript to do that when I have time.
