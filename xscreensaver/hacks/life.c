@@ -88,12 +88,14 @@ static void HSVtoRGB( float *r, float *g, float *b, float h, float s, float v )
 static void *
 generate_world(int length, int height)
 {
+  /* to allow faster calculation, we have 1 char padding around
+   * our world, so we need to add that here */
   int i;
-  unsigned char **world = calloc(length, sizeof(char *));
+  unsigned char **world = calloc(length + 2, sizeof(char *));
   /* calloc will set all bits to 0 */
-  world[0] = calloc(length * height, sizeof(char));
+  world[0] = calloc((length+2) * (height+2), sizeof(char));
 
-  for(i = 1; i < length; i++)
+  for(i = 1; i < length+2; i++)
     world[i] = world[0] + i * height;
 
   return world;
@@ -164,17 +166,17 @@ randomize_world(void *closure)
   int x, y;
 
   /* randomize borders */
-  for(x = 0; x < st->length; ++x)
+  for(x = 0; x < st->length+1; ++x)
   {
-    st->world[x][0]= random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
-    st->world[x][st->height-1] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    /* set padding as well as the normal map */
+    st->world[x][1] = st->world[x][st->height-1] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    st->world[x][st->height-2] = st->world[x][0] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
   }
 
-
-  for(y = 0; y < st->height; ++y)
+  for(y = 0; y < st->height+1; ++y)
   {
-    st->world[0][y] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
-    st->world[st->length - 1][y] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    st->world[1][y] = st->world[st->length - 1][y] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    st->world[st->length - 2][y] = st->world[0][y] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
   }
 }
 
@@ -196,16 +198,16 @@ update_world(void *closure)
   st->world = st->old_world;
   st->old_world = tmp;
 
-  for(x = 0; x < st->length; ++x)
+  for(x = 1; x < st->length; ++x)
   {
-    for(y = 0; y < st->height; ++y)
+    for(y = 1; y < st->height; ++y)
     {
       int alive_count = 0;
       int a, b;
 
       for(a = -1; a <= 1; ++a)
         for(b = -1; b <= 1; ++b)
-          if(st->old_world[(st->length+x+a) % st->length][(st->height+y+b) % st->height] == ALIVE)
+          if(st->old_world[x+a][y+b] == ALIVE)
             ++alive_count;
 
       if(st->old_world[x][y] == ALIVE)
@@ -231,14 +233,13 @@ paint_world(void *closure)
   XGCValues gcv;
   Pixmap p = XCreatePixmap(st->dpy, st->window,st->xlim, st->ylim, 24);
 
-  for(x = 0; x < st->length; ++x)
-    for(y = 0; y < st->height; ++y) {
+  for(x = 1; x < st->length; ++x)
+    for(y = 1; y < st->height; ++y) {
       /* select color according to age */
-      gcv.foreground = st->pixels[st->world[x][y] ];
+      gcv.foreground = st->pixels[ st->world[x][y] ];
       XChangeGC (st->dpy, st->gc, GCForeground, &gcv);
 
       XFillRectangle(st->dpy, p, st->gc, st->scale*x, st->scale*y, st->scale, st->scale);
-
     }
 
   XCopyArea(st->dpy, p, st->window, st->gc, 0, 0, st->xlim, st->ylim, 0, 0);
