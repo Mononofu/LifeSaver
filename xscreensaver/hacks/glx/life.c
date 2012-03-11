@@ -30,7 +30,15 @@
 #ifdef USE_GL /* whole file */
 
 #define RANDOM_LIFE 3
-#define ALIVE 0x00ffffff
+
+/* layout of one cell (32bit int):
+ * | 4 bit neighbours | 4 bit state | 8 bit blue | 8 bit green | 8 bit red |
+ */
+
+/* state masks */
+#define ALIVE_MASK 0x01000000
+/* coloring */
+#define ALIVE_COLOR 0x00ffffff
 #define DEAD 0x0
 #define DEATH_THRESH 0x00100000
 #define DEATH_SUB 0x000faaaa
@@ -103,8 +111,8 @@ setup_world(ModeInfo *mi)
   
   bp->glx_context = init_GL(mi);
 
-  bp->width = MI_WIDTH(mi);
-  bp->height = MI_HEIGHT(mi);
+  bp->width = MI_WIDTH(mi) / scale;
+  bp->height = MI_HEIGHT(mi) / scale;
 
   bp->world = generate_world(bp->width, bp->height);
   bp->old_world = generate_world(bp->width, bp->height);
@@ -125,79 +133,106 @@ ball_handle_event (ModeInfo *mi, XEvent *event)
 }
 
 static void
+set_neighbors(int x, int y, int state, ModeInfo *mi)
+{
+  ball_configuration *bp = &bps[MI_SCREEN(mi)];
+  int a, b;
+
+  if(state)
+    for(a = -1; a <= 1; ++a)
+      for(b = -1; b <= 1; ++b)
+        bp->world[y+b][x+a] += 0x02000000;
+  else
+    for(a = -1; a <= 1; ++a)
+      for(b = -1; b <= 1; ++b)
+        bp->world[y+b][x+a] -= 0x02000000;
+
+
+  if(state) {
+    bp->world[y][x] -= 0x02000000;
+    bp->world[y][x] |= ALIVE_COLOR;
+    bp->world[y][x] |= ALIVE_MASK;
+  }
+  else {
+    bp->world[y][x] += 0x02000000;
+    bp->world[y][x] &= 0xfeffffff;
+    /* save state and neighbor count and restore after setting color */
+    int tmp = bp->world[y][x] & 0xff000000;
+    bp->old_world[y][x] &= 0x00ffffff;
+    bp->world[y][x] = bp->old_world[y][x] < DEATH_THRESH ? 0 : bp->old_world[y][x] - DEATH_SUB;
+    bp->world[y][x] += tmp;
+  }
+
+}
+
+static void
 randomize_world(ModeInfo *mi)
 {
   ball_configuration *bp = &bps[MI_SCREEN(mi)];
-  int x, y;
+  int x, y, new_state;
 
   /* randomize borders */
-  for(x = 0; x < bp->width; ++x)
+  for(x = 1; x < bp->width; ++x)
   {
+    new_state = random() % RANDOM_LIFE == 0 ? 1 : 0;
+    if(new_state != ((bp->world[1][x] >> 24) & 0x01))
+      set_neighbors(x, 1, new_state, mi);
+
+    new_state = random() % RANDOM_LIFE == 0 ? 1 : 0;
+    if(new_state != ((bp->world[bp->height][x] >> 24) & 0x01))
+      set_neighbors(x, bp->height, new_state, mi);
     /* set padding as well as the normal map */
-    bp->world[1][x] = bp->world[bp->height-1][x] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
-    bp->world[bp->height-2][x] = bp->world[0][x] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    /*bp->world[bp->height-1][x] = bp->world[1][x];
+    bp->world[0][x] = bp->world[bp->height-2][x];*/
   }
 
-  for(y = 0; y < bp->height; ++y)
+  for(y = 1; y < bp->height; ++y)
   {
-    bp->world[y][1] = bp->world[y][bp->width-1] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
-    bp->world[y][bp->width-2] = bp->world[y][0] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    new_state = random() % RANDOM_LIFE == 0 ? 1 : 0;
+    if(new_state != ((bp->world[y][1] >> 24) & 0x01))
+      set_neighbors(1, y, new_state, mi);
+
+    new_state = random() % RANDOM_LIFE == 0 ? 1 : 0;
+    if(new_state != ((bp->world[y][bp->width] >> 24) & 0x01))
+      set_neighbors(bp->width, y, new_state, mi);
+
+    /*
+    bp->world[y][1] = bp->world[y][bp->width-1] = random() % RANDOM_LIFE == 0 ? ALIVE_COLOR : DEAD;
+    bp->world[y][bp->width-2] = bp->world[y][0] = random() % RANDOM_LIFE == 0 ? ALIVE_COLOR : DEAD;*/
   }
 }
+
 
 static void
 update_world(ModeInfo *mi)
 {
   ball_configuration *bp = &bps[MI_SCREEN(mi)];
   int x, y;
-  void *tmp = bp->world;
+
 
   randomize_world(mi);
 
-  bp->world = bp->old_world;
-  bp->old_world = tmp;
+ for(y = 0; y < bp->height+1; ++y)
+      memcpy(bp->old_world[y], bp->world[y], bp->width * sizeof(int));
 
-  for(x = 1; x < bp->width-1; ++x)
+
+  for(x = 1; x < bp->width; ++x)
   {
-    for(y = 1; y < bp->height-1; ++y)
+    for(y = 1; y < bp->height; ++y)
     {
-      int alive_count = 0;
-      /* now unrolled */
-      int a, b;
+      int state = bp->old_world[y][x] >> 24;
+      int alive_count = state >> 1;
 
-      for(a = -1; a <= 1; ++a)
-        for(b = -1; b <= 1; ++b)
-          if(bp->old_world[y+b][x+a] == ALIVE)
-            ++alive_count;
-
-      if(bp->old_world[y][x] == ALIVE)
-        --alive_count; /*
-
-      if(bp->old_world[y-1][x-1] == ALIVE)
-        ++alive_count;
-      if(bp->old_world[y-1][x] == ALIVE)
-        ++alive_count;
-      if(bp->old_world[y-1][x+1] == ALIVE)
-        ++alive_count;
-      if(bp->old_world[y][x-1] == ALIVE)
-        ++alive_count;
-      if(bp->old_world[y][x+1] == ALIVE)
-        ++alive_count;
-      if(bp->old_world[y+1][x-1] == ALIVE)
-        ++alive_count;
-      if(bp->old_world[y+1][x] == ALIVE)
-        ++alive_count;
-      if(bp->old_world[y+1][x+1] == ALIVE)
-        ++alive_count;*/
-
-      if(alive_count >= R[0] && alive_count <= R[1])
-        bp->world[y][x] = ALIVE;
-      else if((alive_count > R[2] || alive_count < R[3]))
-        bp->world[y][x] = bp->old_world[y][x] < DEATH_THRESH ? 0 : bp->old_world[y][x] - DEATH_SUB;
-      else
-        bp->world[y][x] = bp->old_world[y][x];
-
-      /*bp->world[y][x] = y == 1 ? (x < WIDTH/2 ? 0x00ff0000 : 0x0000ff00) : (y == 2 ? (x < WIDTH/2 ? 0x000000ff : 0x00ffffff) : 0x00ffffff);*/
+      if(state & 0x01) {
+        /* cell alive - turn off if not enough neighbors */
+        if((alive_count > R[2] || alive_count < R[3]))
+          set_neighbors(x, y, 0, mi);
+      }
+      else {
+        /* cell dead - turn on if correct neighbors */
+        if(alive_count >= R[0] && alive_count <= R[1])
+          set_neighbors(x, y, 1, mi);
+      }
     }
   }
 }
@@ -206,8 +241,6 @@ update_world(ModeInfo *mi)
 ENTRYPOINT void 
 init_ball (ModeInfo *mi)
 {
-  ball_configuration *bp;
-
   if (!bps) {
     bps = (ball_configuration *)
       calloc (MI_NUM_SCREENS(mi), sizeof (ball_configuration));
@@ -216,8 +249,6 @@ init_ball (ModeInfo *mi)
       exit(1);
     }
   }
-
-  bp = &bps[MI_SCREEN(mi)];
 
   setup_world(mi);
 }
@@ -263,7 +294,7 @@ draw_ball (ModeInfo *mi)
   glTexImage2D (
       GL_TEXTURE_2D,
       0,
-      GL_RGBA,
+      GL_RGB,
       bp->width,
       bp->height,
       0,
@@ -274,9 +305,9 @@ draw_ball (ModeInfo *mi)
 
   glBegin(GL_QUADS);
       glTexCoord2f(0.0f, 0.0f); glVertex2f(0.0, 0.0);
-      glTexCoord2f(1.0f, 0.0f); glVertex2f(bp->width, 0.0);
-      glTexCoord2f(1.0f, 1.0f); glVertex2f(bp->width,  bp->height);
-      glTexCoord2f(0.0f, 1.0f); glVertex2f(0.0,  bp->height);
+      glTexCoord2f(1.0f, 0.0f); glVertex2f(MI_WIDTH(mi), 0.0);
+      glTexCoord2f(1.0f, 1.0f); glVertex2f(MI_WIDTH(mi),  MI_HEIGHT(mi));
+      glTexCoord2f(0.0f, 1.0f); glVertex2f(0.0,  MI_HEIGHT(mi));
   glEnd();
 
   glFlush();
