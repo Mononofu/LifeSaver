@@ -1,4 +1,4 @@
-/* dangerball, Copyright (c) 2001-2008 Jamie Zawinski <jwz@jwz.org>
+/* LifeSaver, Copyright (c) 2001-2008 Jamie Zawinski <jwz@jwz.org>
  *
  * Permission to use, copy, modify, distribute, and sell this software and its
  * documentation for any purpose is hereby granted without fee, provided that
@@ -12,17 +12,12 @@
 #define DEFAULTS  "*delay:  30000       \n" \
       "*count:        30          \n" \
 
-# define refresh_ball 0
-# define release_ball 0
+# define refresh_life 0
+# define release_life 0
 #undef countof
 #define countof(x) (sizeof((x))/sizeof((*x)))
 
 #include "xlockmore.h"
-#include "colors.h"
-#include "sphere.h"
-#include "tube.h"
-#include "rotator.h"
-#include "gltrackball.h"
 #include <ctype.h>
 
 #ifdef USE_GL /* whole file */
@@ -46,7 +41,6 @@
 const int R[4] = {3, 3, 3, 2};
 
 const int DEAD_COLOR[15] = {
-  0xDDF6FF,
   0xFFECBA,
   0xFFE299,
   0xFFD877,
@@ -74,9 +68,9 @@ typedef struct {
 
   time_t last_update;
   int frames;
-} ball_configuration;
+} life_configuration;
 
-static ball_configuration *bps = NULL;
+static life_configuration *bps = NULL;
 
 static GLfloat scale;
 
@@ -88,7 +82,7 @@ static argtype vars[] = {
   {&scale,     "scale",  "Scale",  "2.0",  t_Float},
 };
 
-ENTRYPOINT ModeSpecOpt ball_opts = {countof(opts), opts, countof(vars), vars, NULL};
+ENTRYPOINT ModeSpecOpt life_opts = {countof(opts), opts, countof(vars), vars, NULL};
 
 static int
 alive(int cell)
@@ -115,7 +109,7 @@ generate_world(int length, int height)
 /* Window management, etc
  */
 ENTRYPOINT void
-reshape_ball (ModeInfo *mi, int width, int height)
+reshape_life (ModeInfo *mi, int width, int height)
 {
   glMatrixMode (GL_PROJECTION);
   glLoadIdentity ();
@@ -127,7 +121,7 @@ reshape_ball (ModeInfo *mi, int width, int height)
 static void
 setup_world(ModeInfo *mi)
 {
-  ball_configuration *bp = &bps[MI_SCREEN(mi)];
+  life_configuration *bp = &bps[MI_SCREEN(mi)];
 
   
   bp->glx_context = init_GL(mi);
@@ -138,11 +132,11 @@ setup_world(ModeInfo *mi)
   bp->world = generate_world(bp->width, bp->height);
   bp->old_world = generate_world(bp->width, bp->height);
 
-  reshape_ball (mi, MI_WIDTH(mi), MI_HEIGHT(mi));
+  reshape_life (mi, MI_WIDTH(mi), MI_HEIGHT(mi));
 }
 
 ENTRYPOINT Bool
-ball_handle_event (ModeInfo *mi, XEvent *event)
+life_handle_event (ModeInfo *mi, XEvent *event)
 {
   if (event->xany.type == ButtonPress && event->xbutton.button == Button1)
   {
@@ -156,7 +150,7 @@ ball_handle_event (ModeInfo *mi, XEvent *event)
 static void
 set_cell(int x, int y, int alive, ModeInfo *mi)
 {
-  ball_configuration *bp = &bps[MI_SCREEN(mi)];
+  life_configuration *bp = &bps[MI_SCREEN(mi)];
   int a, b;
 
   if(alive) {
@@ -182,7 +176,7 @@ set_cell(int x, int y, int alive, ModeInfo *mi)
 static void
 randomize_world(ModeInfo *mi)
 {
-  ball_configuration *bp = &bps[MI_SCREEN(mi)];
+  life_configuration *bp = &bps[MI_SCREEN(mi)];
   int x, y, new_state;
 
   /* randomize borders */
@@ -213,7 +207,7 @@ randomize_world(ModeInfo *mi)
 static void
 update_world(ModeInfo *mi)
 {
-  ball_configuration *bp = &bps[MI_SCREEN(mi)];
+  life_configuration *bp = &bps[MI_SCREEN(mi)];
   int x, y;
 
   randomize_world(mi);
@@ -254,11 +248,11 @@ update_world(ModeInfo *mi)
 }
 
 ENTRYPOINT void 
-init_ball (ModeInfo *mi)
+init_life (ModeInfo *mi)
 {
   if (!bps) {
-    bps = (ball_configuration *)
-      calloc (MI_NUM_SCREENS(mi), sizeof (ball_configuration));
+    bps = (life_configuration *)
+      calloc (MI_NUM_SCREENS(mi), sizeof (life_configuration));
     if (!bps) {
       fprintf(stderr, "%s: out of memory\n", progname);
       exit(1);
@@ -270,9 +264,9 @@ init_ball (ModeInfo *mi)
 
 
 ENTRYPOINT void
-draw_ball (ModeInfo *mi)
+draw_life (ModeInfo *mi)
 {
-  ball_configuration *bp = &bps[MI_SCREEN(mi)];
+  life_configuration *bp = &bps[MI_SCREEN(mi)];
   Display *dpy = MI_DISPLAY(mi);
   Window window = MI_WINDOW(mi);
 
@@ -333,6 +327,6 @@ draw_ball (ModeInfo *mi)
   glXSwapBuffers(dpy, window);
 }
 
-XSCREENSAVER_MODULE_2 ("DangerBall", dangerball, ball)
+XSCREENSAVER_MODULE_2 ("LifeSaver", lifesaver, life)
 
 #endif /* USE_GL */
