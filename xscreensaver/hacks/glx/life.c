@@ -39,12 +39,30 @@
 #define ALIVE_GAME 0xf0000000
 #define ALIVE_DRAW 0x00ffffff
 #define DEAD_GAME 0xe0000000
-#define DEAD_DRAW 0x00f05555
 
 /* a new cell will appear if the number of neighbors (Sum)
  * is equal or more than r[0] and equal or less than r[1]
  * a cell will die if the Sum is more than r[2] or less than r[3] */
-int R[4] = {3, 3, 3, 2};
+const int R[4] = {3, 3, 3, 2};
+
+const int DEAD_COLOR[15] = {
+  0xDDF6FF,
+  0xFFECBA,
+  0xFFE299,
+  0xFFD877,
+  0xFFCF56,
+  0xFFC532,
+  0xFFBB11,
+  0xF4AF00,
+  0xE5A400,
+  0xD39700,
+  0xC48C00,
+  0xB27F00,
+  0xA07300,
+  0x916800,
+  0x7F5B00,
+  0x000000
+};
 
 typedef struct {
   GLXContext *glx_context;
@@ -153,7 +171,7 @@ set_cell(int x, int y, int alive, ModeInfo *mi)
   else {
     bp->world[y][x] += ONE_NEIGHBOR;
     bp->world[y][x] &= 0x0f000000;
-    bp->world[y][x] |= DEAD_GAME | DEAD_DRAW;
+    bp->world[y][x] |= DEAD_GAME | DEAD_COLOR[0];
 
     for(a = -1; a <= 1; ++a)
       for(b = -1; b <= 1; ++b)
@@ -222,7 +240,9 @@ update_world(ModeInfo *mi)
         if(alive_count >= R[0] && alive_count <= R[1])
           set_cell(x, y, 1, mi);
         else if(cell_alive > 1) {
-          bp->world[y][x] -= ONE_LIFE + DEATH_SUB;
+          bp->world[y][x] -= ONE_LIFE;
+          bp->world[y][x] &= 0xff000000;
+          bp->world[y][x] += DEAD_COLOR[16-cell_alive];
         }
         else if(cell_alive == 1) {
           bp->world[y][x] &= 0x0f000000;
