@@ -29,21 +29,11 @@
 
 #ifdef USE_GL /* whole file */
 
-
-#define DEF_SPIN        "True"
-#define DEF_WANDER      "True"
-#define DEF_SPEED       "0.05"
-
-#define SPIKE_FACES   12  /* how densely to render spikes */
-#define SMOOTH_SPIKES True
-#define SPHERE_SLICES 32  /* how densely to render spheres */
-#define SPHERE_STACKS 16
-
-#define WIDTH  1000
-#define HEIGHT 1000
 #define RANDOM_LIFE 3
-#define ALIVE 255
-#define DEAD 0
+#define ALIVE 0x00ffffff
+#define DEAD 0x0
+#define DEATH_THRESH 0x00100000
+#define DEATH_SUB 0x000faaaa
 
 
 /* a new cell will appear if the number of neighbors (Sum)
@@ -54,9 +44,10 @@ int R[4] = {3, 3, 3, 2};
 typedef struct {
   GLXContext *glx_context;
 
-  unsigned char world[2][WIDTH][HEIGHT][3];
+  unsigned int **world;
+  unsigned int **old_world;
 
-  int cur;
+  int width, height;
 
   time_t last_update;
   int frames;
@@ -64,51 +55,72 @@ typedef struct {
 
 static ball_configuration *bps = NULL;
 
-static Bool do_spin;
-static GLfloat speed;
-static Bool do_wander;
+static GLfloat scale;
 
 static XrmOptionDescRec opts[] = {
-  { "-spin",   ".spin",   XrmoptionNoArg, "True" },
-  { "+spin",   ".spin",   XrmoptionNoArg, "False" },
-  { "-speed",  ".speed",  XrmoptionSepArg, 0 },
-  { "-wander", ".wander", XrmoptionNoArg, "True" },
-  { "+wander", ".wander", XrmoptionNoArg, "False" }
+  { "-scale",  ".scale",  XrmoptionSepArg, 0 },
 };
 
 static argtype vars[] = {
-  {&do_spin,   "spin",   "Spin",   DEF_SPIN,   t_Bool},
-  {&do_wander, "wander", "Wander", DEF_WANDER, t_Bool},
-  {&speed,     "speed",  "Speed",  DEF_SPEED,  t_Float},
+  {&scale,     "scale",  "Scale",  "1.0",  t_Float},
 };
 
 ENTRYPOINT ModeSpecOpt ball_opts = {countof(opts), opts, countof(vars), vars, NULL};
+
+static void *
+generate_world(int length, int height)
+{
+  /* to allow faster calculation, we have 1 char padding around
+   * our world, so we need to add that here */
+  int i;
+  unsigned int **world = calloc(height+2, sizeof(int *));
+  /* calloc will set all bits to 0 */
+  world[0] = calloc((length+2) * (height+2), sizeof(int));
+
+  for(i = 1; i < height+2; i++)
+    world[i] = world[0] + i * length;
+
+  return world;
+}
 
 /* Window management, etc
  */
 ENTRYPOINT void
 reshape_ball (ModeInfo *mi, int width, int height)
 {
-  GLfloat h = (GLfloat) height / (GLfloat) width;
-
-  glViewport (0, 0, (GLint) width, (GLint) height);
-
-  glMatrixMode(GL_PROJECTION);
-  glLoadIdentity();
-  gluPerspective (30.0, 1/h, 1.0, 100.0);
-
-  glMatrixMode(GL_MODELVIEW);
-  glLoadIdentity();
-  gluLookAt( 0.0, 0.0, 5.0,
-             0.0, 0.0, 0.0,
-             0.0, 1.0, 0.0);
+  glMatrixMode (GL_PROJECTION);
+  glLoadIdentity ();
+  gluOrtho2D (0, (GLint) width, 0, (GLint) height);
 
   glClear(GL_COLOR_BUFFER_BIT);
+}
+
+static void
+setup_world(ModeInfo *mi)
+{
+  ball_configuration *bp = &bps[MI_SCREEN(mi)];
+
+  
+  bp->glx_context = init_GL(mi);
+
+  bp->width = MI_WIDTH(mi);
+  bp->height = MI_HEIGHT(mi);
+
+  bp->world = generate_world(bp->width, bp->height);
+  bp->old_world = generate_world(bp->width, bp->height);
+
+  reshape_ball (mi, MI_WIDTH(mi), MI_HEIGHT(mi));
 }
 
 ENTRYPOINT Bool
 ball_handle_event (ModeInfo *mi, XEvent *event)
 {
+  if (event->xany.type == ButtonPress && event->xbutton.button == Button1)
+  {
+    setup_world(mi);
+    return True;
+  }
+
   return False;
 }
 
@@ -119,25 +131,18 @@ randomize_world(ModeInfo *mi)
   int x, y;
 
   /* randomize borders */
-  for(x = 0; x < WIDTH; ++x)
+  for(x = 0; x < bp->width; ++x)
   {
     /* set padding as well as the normal map */
-    bp->world[bp->cur][x][1][2] = bp->world[bp->cur][x][WIDTH-1][2] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
-    bp->world[bp->cur][x][WIDTH-2][2] = bp->world[bp->cur][x][0][2] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    bp->world[1][x] = bp->world[bp->height-1][x] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    bp->world[bp->height-2][x] = bp->world[0][x] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
   }
 
-  for(y = 0; y < HEIGHT; ++y)
+  for(y = 0; y < bp->height; ++y)
   {
-    bp->world[bp->cur][1][y][2] = bp->world[bp->cur][HEIGHT-1][y][2] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
-    bp->world[bp->cur][HEIGHT-2][y][2] = bp->world[bp->cur][0][y][2] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    bp->world[y][1] = bp->world[y][bp->width-1] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
+    bp->world[y][bp->width-2] = bp->world[y][0] = random() % RANDOM_LIFE == 0 ? ALIVE : DEAD;
   }
-}
-
-
-static int
-max(int a, int b)
-{
-  return a > b ? a : b;
 }
 
 static void
@@ -145,33 +150,54 @@ update_world(ModeInfo *mi)
 {
   ball_configuration *bp = &bps[MI_SCREEN(mi)];
   int x, y;
-  int old = bp->cur;
+  void *tmp = bp->world;
 
   randomize_world(mi);
 
-  bp->cur = (bp->cur + 1) % 2;
+  bp->world = bp->old_world;
+  bp->old_world = tmp;
 
-  for(x = 1; x < WIDTH-1; ++x)
+  for(x = 1; x < bp->width-1; ++x)
   {
-    for(y = 1; y < HEIGHT-1; ++y)
+    for(y = 1; y < bp->height-1; ++y)
     {
       int alive_count = 0;
+      /* now unrolled */
       int a, b;
 
       for(a = -1; a <= 1; ++a)
         for(b = -1; b <= 1; ++b)
-          if(bp->world[old][x+a][y+b][2] == ALIVE)
+          if(bp->old_world[y+b][x+a] == ALIVE)
             ++alive_count;
 
-      if(bp->world[old][x][y][2] == ALIVE)
-        --alive_count;
+      if(bp->old_world[y][x] == ALIVE)
+        --alive_count; /*
+
+      if(bp->old_world[y-1][x-1] == ALIVE)
+        ++alive_count;
+      if(bp->old_world[y-1][x] == ALIVE)
+        ++alive_count;
+      if(bp->old_world[y-1][x+1] == ALIVE)
+        ++alive_count;
+      if(bp->old_world[y][x-1] == ALIVE)
+        ++alive_count;
+      if(bp->old_world[y][x+1] == ALIVE)
+        ++alive_count;
+      if(bp->old_world[y+1][x-1] == ALIVE)
+        ++alive_count;
+      if(bp->old_world[y+1][x] == ALIVE)
+        ++alive_count;
+      if(bp->old_world[y+1][x+1] == ALIVE)
+        ++alive_count;*/
 
       if(alive_count >= R[0] && alive_count <= R[1])
-        bp->world[bp->cur][x][y][2] = ALIVE;
+        bp->world[y][x] = ALIVE;
       else if((alive_count > R[2] || alive_count < R[3]))
-        bp->world[bp->cur][x][y][2] = max(bp->world[old][x][y][2] - 25, 0);
+        bp->world[y][x] = bp->old_world[y][x] < DEATH_THRESH ? 0 : bp->old_world[y][x] - DEATH_SUB;
       else
-        bp->world[bp->cur][x][y][2] = bp->world[old][x][y][2];
+        bp->world[y][x] = bp->old_world[y][x];
+
+      /*bp->world[y][x] = y == 1 ? (x < WIDTH/2 ? 0x00ff0000 : 0x0000ff00) : (y == 2 ? (x < WIDTH/2 ? 0x000000ff : 0x00ffffff) : 0x00ffffff);*/
     }
   }
 }
@@ -193,9 +219,7 @@ init_ball (ModeInfo *mi)
 
   bp = &bps[MI_SCREEN(mi)];
 
-  bp->glx_context = init_GL(mi);
-
-  reshape_ball (mi, MI_WIDTH(mi), MI_HEIGHT(mi));
+  setup_world(mi);
 }
 
 
@@ -206,12 +230,13 @@ draw_ball (ModeInfo *mi)
   Display *dpy = MI_DISPLAY(mi);
   Window window = MI_WINDOW(mi);
 
+  time_t now = time(NULL);
+
   if (!bp->glx_context)
     return;
 
   bp->frames++;
 
-  time_t now = time(NULL);
   /* print FPS every 5 seconds */
   if(now > bp->last_update + 5)
   {
@@ -225,7 +250,7 @@ draw_ball (ModeInfo *mi)
 
   glXMakeCurrent(MI_DISPLAY(mi), MI_WINDOW(mi), *(bp->glx_context));
 
-  glShadeModel(GL_SMOOTH);
+  /*glShadeModel(GL_SMOOTH);*/
 
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_NORMALIZE);
@@ -238,20 +263,20 @@ draw_ball (ModeInfo *mi)
   glTexImage2D (
       GL_TEXTURE_2D,
       0,
-      GL_RGB,
-      WIDTH,
-      HEIGHT,
+      GL_RGBA,
+      bp->width,
+      bp->height,
       0,
-      GL_RGB,
+      GL_RGBA,
       GL_UNSIGNED_BYTE,
-      &(bp->world[bp->cur][0][0][0])
+      &(bp->world[0][0])
   );
 
   glBegin(GL_QUADS);
-      glTexCoord2f(0.0f, 0.0f); glVertex2f(-1.0, -1.0);
-      glTexCoord2f(1.0f, 0.0f); glVertex2f( 1.0, -1.0);
-      glTexCoord2f(1.0f, 1.0f); glVertex2f( 1.0,  1.0);
-      glTexCoord2f(0.0f, 1.0f); glVertex2f(-1.0,  1.0);
+      glTexCoord2f(0.0f, 0.0f); glVertex2f(0.0, 0.0);
+      glTexCoord2f(1.0f, 0.0f); glVertex2f(bp->width, 0.0);
+      glTexCoord2f(1.0f, 1.0f); glVertex2f(bp->width,  bp->height);
+      glTexCoord2f(0.0f, 1.0f); glVertex2f(0.0,  bp->height);
   glEnd();
 
   glFlush();
