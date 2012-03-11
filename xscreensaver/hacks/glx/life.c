@@ -327,6 +327,6 @@ draw_life (ModeInfo *mi)
   glXSwapBuffers(dpy, window);
 }
 
-XSCREENSAVER_MODULE_2 ("LifeSaver", lifesaver, life)
+XSCREENSAVER_MODULE ("LifeSaver", life)
 
 #endif /* USE_GL */
