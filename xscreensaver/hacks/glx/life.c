@@ -11,8 +11,6 @@
 
 #define DEFAULTS  "*delay:  30000       \n" \
       "*count:        30          \n" \
-      "*showFPS:      False       \n" \
-      "*wireframe:    False       \n" \
 
 # define refresh_ball 0
 # define release_ball 0
@@ -32,17 +30,16 @@
 #define RANDOM_LIFE 3
 
 /* layout of one cell (32bit int):
- * | 4 bit neighbours | 4 bit state | 8 bit blue | 8 bit green | 8 bit red |
+ * | 4 bit state | 4 bit neighbours | 8 bit blue | 8 bit green | 8 bit red |
  */
 
-/* state masks */
-#define ALIVE_MASK 0x01000000
-/* coloring */
-#define ALIVE_COLOR 0x00ffffff
-#define DEAD 0x0
-#define DEATH_THRESH 0x00100000
 #define DEATH_SUB 0x000faaaa
-
+#define ONE_LIFE 0x10000000
+#define ONE_NEIGHBOR 0x01000000
+#define ALIVE_GAME 0xf0000000
+#define ALIVE_DRAW 0x00ffffff
+#define DEAD_GAME 0xe0000000
+#define DEAD_DRAW 0x00f05555
 
 /* a new cell will appear if the number of neighbors (Sum)
  * is equal or more than r[0] and equal or less than r[1]
@@ -70,10 +67,16 @@ static XrmOptionDescRec opts[] = {
 };
 
 static argtype vars[] = {
-  {&scale,     "scale",  "Scale",  "1.0",  t_Float},
+  {&scale,     "scale",  "Scale",  "2.0",  t_Float},
 };
 
 ENTRYPOINT ModeSpecOpt ball_opts = {countof(opts), opts, countof(vars), vars, NULL};
+
+static int
+alive(int cell)
+{
+  return (cell & ALIVE_GAME) == ALIVE_GAME;
+}
 
 static void *
 generate_world(int length, int height)
@@ -133,36 +136,29 @@ ball_handle_event (ModeInfo *mi, XEvent *event)
 }
 
 static void
-set_neighbors(int x, int y, int state, ModeInfo *mi)
+set_cell(int x, int y, int alive, ModeInfo *mi)
 {
   ball_configuration *bp = &bps[MI_SCREEN(mi)];
   int a, b;
 
-  if(state)
+  if(alive) {
     for(a = -1; a <= 1; ++a)
       for(b = -1; b <= 1; ++b)
-        bp->world[y+b][x+a] += 0x02000000;
-  else
-    for(a = -1; a <= 1; ++a)
-      for(b = -1; b <= 1; ++b)
-        bp->world[y+b][x+a] -= 0x02000000;
+        bp->world[y+b][x+a] += ONE_NEIGHBOR;
 
-
-  if(state) {
-    bp->world[y][x] -= 0x02000000;
-    bp->world[y][x] |= ALIVE_COLOR;
-    bp->world[y][x] |= ALIVE_MASK;
+    /* we are not our own neighbor */
+    bp->world[y][x] -= ONE_NEIGHBOR;
+    bp->world[y][x] |= ALIVE_DRAW | ALIVE_GAME;
   }
   else {
-    bp->world[y][x] += 0x02000000;
-    bp->world[y][x] &= 0xfeffffff;
-    /* save state and neighbor count and restore after setting color */
-    int tmp = bp->world[y][x] & 0xff000000;
-    bp->old_world[y][x] &= 0x00ffffff;
-    bp->world[y][x] = bp->old_world[y][x] < DEATH_THRESH ? 0 : bp->old_world[y][x] - DEATH_SUB;
-    bp->world[y][x] += tmp;
-  }
+    bp->world[y][x] += ONE_NEIGHBOR;
+    bp->world[y][x] &= 0x0f000000;
+    bp->world[y][x] |= DEAD_GAME | DEAD_DRAW;
 
+    for(a = -1; a <= 1; ++a)
+      for(b = -1; b <= 1; ++b)
+        bp->world[y+b][x+a] -= ONE_NEIGHBOR;
+  }
 }
 
 static void
@@ -175,30 +171,23 @@ randomize_world(ModeInfo *mi)
   for(x = 1; x < bp->width; ++x)
   {
     new_state = random() % RANDOM_LIFE == 0 ? 1 : 0;
-    if(new_state != ((bp->world[1][x] >> 24) & 0x01))
-      set_neighbors(x, 1, new_state, mi);
+    if(new_state != alive(bp->world[1][x]))
+      set_cell(x, 1, new_state, mi);
 
     new_state = random() % RANDOM_LIFE == 0 ? 1 : 0;
-    if(new_state != ((bp->world[bp->height][x] >> 24) & 0x01))
-      set_neighbors(x, bp->height, new_state, mi);
-    /* set padding as well as the normal map */
-    /*bp->world[bp->height-1][x] = bp->world[1][x];
-    bp->world[0][x] = bp->world[bp->height-2][x];*/
+    if(new_state != alive(bp->world[bp->height][x]))
+      set_cell(x, bp->height, new_state, mi);
   }
 
   for(y = 1; y < bp->height; ++y)
   {
     new_state = random() % RANDOM_LIFE == 0 ? 1 : 0;
-    if(new_state != ((bp->world[y][1] >> 24) & 0x01))
-      set_neighbors(1, y, new_state, mi);
+    if(new_state != alive(bp->world[y][1]))
+      set_cell(1, y, new_state, mi);
 
     new_state = random() % RANDOM_LIFE == 0 ? 1 : 0;
-    if(new_state != ((bp->world[y][bp->width] >> 24) & 0x01))
-      set_neighbors(bp->width, y, new_state, mi);
-
-    /*
-    bp->world[y][1] = bp->world[y][bp->width-1] = random() % RANDOM_LIFE == 0 ? ALIVE_COLOR : DEAD;
-    bp->world[y][bp->width-2] = bp->world[y][0] = random() % RANDOM_LIFE == 0 ? ALIVE_COLOR : DEAD;*/
+    if(new_state != alive(bp->world[y][bp->width]))
+      set_cell(bp->width, y, new_state, mi);
   }
 }
 
@@ -209,11 +198,10 @@ update_world(ModeInfo *mi)
   ball_configuration *bp = &bps[MI_SCREEN(mi)];
   int x, y;
 
-
   randomize_world(mi);
 
- for(y = 0; y < bp->height+1; ++y)
-      memcpy(bp->old_world[y], bp->world[y], bp->width * sizeof(int));
+  for(y = 0; y < bp->height+1; ++y)
+    memcpy(bp->old_world[y], bp->world[y], bp->width * sizeof(int));
 
 
   for(x = 1; x < bp->width; ++x)
@@ -221,22 +209,29 @@ update_world(ModeInfo *mi)
     for(y = 1; y < bp->height; ++y)
     {
       int state = bp->old_world[y][x] >> 24;
-      int alive_count = state >> 1;
+      int alive_count = state & 0x0f;
+      int cell_alive = state >> 4;
 
-      if(state & 0x01) {
+      if(alive(bp->old_world[y][x])) {
         /* cell alive - turn off if not enough neighbors */
         if((alive_count > R[2] || alive_count < R[3]))
-          set_neighbors(x, y, 0, mi);
+          set_cell(x, y, 0, mi);
       }
       else {
         /* cell dead - turn on if correct neighbors */
         if(alive_count >= R[0] && alive_count <= R[1])
-          set_neighbors(x, y, 1, mi);
+          set_cell(x, y, 1, mi);
+        else if(cell_alive > 1) {
+          bp->world[y][x] -= ONE_LIFE + DEATH_SUB;
+        }
+        else if(cell_alive == 1) {
+          bp->world[y][x] &= 0x0f000000;
+        }
+
       }
     }
   }
 }
-
 
 ENTRYPOINT void 
 init_ball (ModeInfo *mi)
@@ -266,6 +261,7 @@ draw_ball (ModeInfo *mi)
   if (!bp->glx_context)
     return;
 
+#ifdef DEBUG
   bp->frames++;
 
   /* print FPS every 5 seconds */
@@ -275,7 +271,7 @@ draw_ball (ModeInfo *mi)
     fprintf(stderr, "FPS: %f \n", bp->frames / 5.0f);
     bp->frames = 0;
   }
-
+#endif
 
   update_world(mi);
 
@@ -290,6 +286,7 @@ draw_ball (ModeInfo *mi)
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glEnable (GL_TEXTURE_2D);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
   glTexImage2D (
       GL_TEXTURE_2D,
